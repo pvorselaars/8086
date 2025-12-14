@@ -1,11 +1,26 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 
-#define OP_MOV_REG_TO_REG 0b10001000
+#define OP_MOV_RM_TO_RM   0b10001000
 #define OP_MOV_IMMEDIATE  0b10110000
 #define OP_MOV_IMM_TO_RM  0b11000110
 #define OP_MOV_MEM_TO_ACC 0b10100000
 #define OP_MOV_SEG_TO_RM  0b10001100
+
+#define OP_ARITH_IMM_TO_RM 0b10000000
+
+#define OP_ADD_RM_TO_RM   0b00000000
+#define OP_ADD_IMM_TO_ACC 0b00000100
+
+#define OP_SUB_RM_TO_RM	  0b00101000
+#define OP_SUB_IMM_TO_ACC 0b00101100
+
+#define OP_CMP_RM_TO_RM	  0b00111000
+#define OP_CMP_IMM_TO_ACC 0b00111100
+
+#define OP_COND_JUMP			0b01110000
+#define OP_COND_LOOP			0b11100000
 
 static char *registers[] = {
 	"al",
@@ -33,6 +48,43 @@ static char *segment_registers[] = {
 	"ds"
 };
 
+static char *imm_op[] = {
+	"add",
+	"or",
+	"adc",
+	"sbb",
+	"and",
+	"sub",
+	"xor",
+	"cmp"
+};
+
+static char *jumps[] = {
+	"jo",
+	"jno",
+	"jb",
+	"jnb",
+	"je",
+	"jne",
+	"jbe",
+	"ja",
+	"js",
+	"jns",
+	"jp",
+	"jnp",
+	"jl",
+	"jnl",
+	"jle",
+	"jg"
+};
+
+static char *loops[] = {
+	"loopnz",
+	"loopz",
+	"loop",
+	"jcxz",
+};
+
 static char *ea_base[] = {
 	"bx + si",
 	"bx + di",
@@ -44,68 +96,77 @@ static char *ea_base[] = {
 	"bx"
 };
 
-void format_displacement(char *ea, int16_t disp, int16_t rm)
+uint16_t read_word(FILE *f)
 {
-	if (disp == 0) {
-		sprintf(ea, "[%s]", ea_base[rm]);
-	} else if (disp > 0) {
-		sprintf(ea, "[%s + %d]", ea_base[rm], disp);
-	} else {
-		sprintf(ea, "[%s - %d]", ea_base[rm], -disp);
-	}
-}
-
-void get_8bit_displacement(char *ea, int16_t rm, FILE *input)
-{
-	int disp_byte = fgetc(input);
-	if (disp_byte == EOF) {
-		fprintf(stderr, "Unexpected EOF reading displacement\n");
-		return;
-	}
-	int16_t disp = (int8_t) disp_byte;
-
-	format_displacement(ea, disp, rm);
-}
-
-void get_16bit_displacement(char *ea, int16_t rm, FILE *input)
-{
-	int lo = fgetc(input);
-	int hi = fgetc(input);
+	int lo = fgetc(f);
+	int hi = fgetc(f);
 	if (lo == EOF || hi == EOF) {
-		fprintf(stderr, "Unexpected EOF reading displacement\n");
-		return;
+		fprintf(stderr, "Unexpected EOF\n");
+		exit(1);
 	}
-	int16_t disp = (int16_t) (lo | (hi << 8));
-
-	format_displacement(ea, disp, rm);
+	return lo | (hi << 8);
 }
 
-int16_t get_immediate(FILE *input, int16_t w) {
-			int16_t data;
-			int lo = fgetc(input);
-			if (lo == EOF) {
-				fprintf(stderr, "Unexpected EOF reading immediate\n");
-				return 0;
-			}
+int16_t get_immediate(FILE *f, bool w, bool sign_extend)
+{
+	if (sign_extend && w) {
+		int byte = fgetc(f);
+		if (byte == EOF) {
+			fprintf(stderr, "Unexpected EOF\n");
+			exit(1);
+		}
+		return (int8_t) byte;
+	}
 
-			if (w) {
-				int hi = fgetc(input);
-				if (hi == EOF) {
-					fprintf(stderr, "Unexpected EOF reading immediate\n");
-					return 0;
-				}
-				data = lo | (hi << 8);
-			} else {
-				data = lo;
-			}
-			return data;
+	if (w) {
+		return (int16_t) read_word(f);
+	} else {
+		int byte = fgetc(f);
+		if (byte == EOF) {
+			fprintf(stderr, "Unexpected EOF\n");
+			exit(1);
+		}
+		return byte;
+	}
+}
+
+bool decode_rm(FILE *f, uint8_t mod, uint8_t rm, bool w, char *ea_out, char **reg_out)
+{
+	if (mod == 0b11) {
+		*reg_out = registers[(w << 3) + rm];
+		return true;
+	}
+
+	int16_t disp = 0;
+
+	if (mod == 0b00 && rm == 0b110) {
+		uint16_t addr = read_word(f);
+		sprintf(ea_out, "[%u]", addr);
+	} else {
+		if (mod == 0b01) {
+			disp = (int8_t) fgetc(f);
+		} else if (mod == 0b10) {
+			disp = (int16_t) read_word(f);
+		}
+
+		if (disp == 0) {
+			sprintf(ea_out, "[%s]", ea_base[rm]);
+		} else if (disp > 0) {
+			sprintf(ea_out, "[%s + %d]", ea_base[rm], disp);
+		} else {
+			sprintf(ea_out, "[%s - %d]", ea_base[rm], -disp);
+		}
+	}
+
+	return false;
 }
 
 int main(int argc, char *argv[])
 {
-
-	if (argc < 2)
-		return -1;
+	if (argc < 2) {
+		fprintf(stderr, "Usage: %s <file>\n", argv[0]);
+		return 1;
+	}
 
 	FILE *input = fopen(argv[1], "r");
 
@@ -117,204 +178,228 @@ int main(int argc, char *argv[])
 	printf("; %s\nbits 16\n", argv[1]);
 
 	int32_t c;
-	int16_t data, d, w, mod, reg, rm, sr;
-
 	while ((c = fgetc(input)) != EOF) {
-		char ea[64];	// effective address
+		uint8_t opcode = c;
 
 		// MOV register/memory to/from register
-		if ((c & 0b11111100) == OP_MOV_REG_TO_REG) {
-			d = (c >> 1) & 1;
-			w = c & 1;
+		if ((opcode & 0b11111100) == OP_MOV_RM_TO_RM) {
+			bool d = (opcode >> 1) & 1;
+			bool w = opcode & 1;
 
-			c = fgetc(input);
-			if (c == EOF) {
-				fprintf(stderr, "Unexpected EOF after opcode\n");
-				fclose(input);
-				return -1;
-			}
+			uint8_t modrm = fgetc(input);
+			uint8_t mod = modrm >> 6;
+			uint8_t reg = (modrm >> 3) & 7;
+			uint8_t rm = modrm & 7;
 
-			mod = (c >> 6);
-			reg = (c >> 3) & 7;
-			rm = c & 7;
+			char ea[64];
+			char *rm_operand, *reg_operand = registers[(w << 3) + reg];
 
-			char *reg_name = registers[(w << 3) + reg];
+			bool is_reg = decode_rm(input, mod, rm, w, ea, &rm_operand);
 
-			switch (mod) {
-			case 0b11:	// register to register
-				char *rm_name = registers[(w << 3) + rm];
-				char *src = d ? rm_name : reg_name;
-				char *dst = d ? reg_name : rm_name;
-				printf("mov %s, %s\n", dst, src);
-				break;
+			char *src = d ? (is_reg ? rm_operand : ea) : reg_operand;
+			char *dst = d ? reg_operand : (is_reg ? rm_operand : ea);
 
-			case 0b01:	// memory mode, 8 bit displacement
-				get_8bit_displacement(ea, rm, input);
-				printf("mov %s, %s\n", d ? reg_name : ea, d ? ea : reg_name);
-				break;
-
-			case 0b10:	// memory mode, 16 bit displacement
-				get_16bit_displacement(ea, rm, input);
-				printf("mov %s, %s\n", d ? reg_name : ea, d ? ea : reg_name);
-				break;
-
-			case 0b00:	// memory mode, no displacement
-				if (rm == 0b110) {
-					int lo = fgetc(input);
-					int hi = fgetc(input);
-					if (lo == EOF || hi == EOF) {
-						fprintf(stderr, "Unexpected EOF reading address\n");
-						fclose(input);
-						return -1;
-					}
-					uint16_t addr = lo | (hi << 8);
-					sprintf(ea, "[%d]", addr);
-				} else {
-					sprintf(ea, "[%s]", ea_base[rm]);
-				}
-				printf("mov %s, %s\n", d ? reg_name : ea, d ? ea : reg_name);
-				break;
-
-			default:
-				fprintf(stderr, "Unsupported addressing mode: %b\n", mod);
-				return -1;
-			}
-
+			printf("mov %s, %s\n", dst, src);
 			continue;
 		}
 		// MOV immediate to register
-		if ((c & 0b11110000) == OP_MOV_IMMEDIATE) {
-			w = (c >> 3) & 1;
-			reg = c & 7;
-
-			data = get_immediate(input, w);
+		if ((opcode & 0b11110000) == OP_MOV_IMMEDIATE) {
+			bool w = (opcode >> 3) & 1;
+			uint8_t reg = opcode & 7;
+			int16_t data = get_immediate(input, w, false);
 
 			printf("mov %s, %d\n", registers[(w << 3) + reg], data);
-
 			continue;
 		}
 		// MOV immediate to register/memory
-		if ((c & 0b11111110) == OP_MOV_IMM_TO_RM) {
-			w = c & 1;
+		if ((opcode & 0b11111110) == OP_MOV_IMM_TO_RM) {
+			bool w = opcode & 1;
 
-			c = fgetc(input);
-			if (c == EOF) {
-				fprintf(stderr, "Unexpected EOF after opcode\n");
-				fclose(input);
-				return -1;
-			}
+			uint8_t modrm = fgetc(input);
+			uint8_t mod = modrm >> 6;
+			uint8_t rm = modrm & 7;
 
-			mod = (c >> 6);
-			reg = (c >> 3) & 7;
-			rm = c & 7;
+			char ea[64];
+			char *rm_operand;
+			bool is_reg = decode_rm(input, mod, rm, w, ea, &rm_operand);
 
-			switch (mod) {
-			case 0b01:	// memory mode, 8 bit displacement
-				get_8bit_displacement(ea, rm, input);
-				data = get_immediate(input, w);
-				printf("mov %s, %s%d\n", ea, w ? "word " : "byte ", data);
-				break;
+			int16_t data = get_immediate(input, w, false);
 
-			case 0b10:	// memory mode, 16 bit displacement
-				get_16bit_displacement(ea, rm, input);
-				data = get_immediate(input, w);
-				printf("mov %s, %s%d\n", ea, w ? "word " : "byte ", data);
-				break;
-
-			case 0b00:	// memory mode, no displacement
-				if (rm == 0b110) {
-					uint16_t addr = get_immediate(input, w);
-					sprintf(ea, "[%d]", addr);
-				} else {
-					data = get_immediate(input, w);
-					sprintf(ea, "[%s]", ea_base[rm]);
-				}
-				printf("mov %s, %s%d\n", ea, w ? "word " : "byte ", data);
-				break;
-
-			default:
-				fprintf(stderr, "Unsupported addressing mode: %b\n", mod);
-				return -1;
-			}
-
-			continue;
-		}
-		// MOV memory to accumalator
-		if ((c & 0b11111100) == OP_MOV_MEM_TO_ACC) {
-			d = (c >> 1) & 1;
-
-			data = get_immediate(input, 1);
-
-			if (d) {
-				printf("mov [%d], %s\n", data, w ? "ax" : "al");
+			if (is_reg) {
+				printf("mov %s, %d\n", rm_operand, data);
 			} else {
-				printf("mov %s, [%d]\n", w ? "ax" : "al", data);
+				printf("mov %s %s, %d\n", w ? "word" : "byte", ea, data);
 			}
-
 			continue;
 		}
-		// MOV segment registers to register/memory
-		if ((c & 0b11111101) == OP_MOV_SEG_TO_RM) {
-			d = (c >> 1) & 1;
+		// MOV memory to/from accumulator
+		if ((opcode & 0b11111100) == OP_MOV_MEM_TO_ACC) {
+			bool d = (opcode >> 1) & 1;
+			bool w = opcode & 1;
+			uint16_t addr = read_word(input);
 
-			c = fgetc(input);
-			if (c == EOF) {
-				fprintf(stderr, "Unexpected EOF after opcode\n");
-				fclose(input);
-				return -1;
+			char *acc = w ? "ax" : "al";
+			if (d) {
+				printf("mov [%u], %s\n", addr, acc);
+			} else {
+				printf("mov %s, [%u]\n", acc, addr);
 			}
+			continue;
+		}
+		// MOV segment register to/from register/memory
+		if ((opcode & 0b11111101) == OP_MOV_SEG_TO_RM) {
+			bool d = (opcode >> 1) & 1;
 
-			rm = c & 7;
-			sr = (c >> 3) & 3;
-			mod = (c >> 6);
+			uint8_t modrm = fgetc(input);
+			uint8_t mod = modrm >> 6;
+			uint8_t sr = (modrm >> 3) & 3;
+			uint8_t rm = modrm & 7;
 
-			char *reg_name = segment_registers[sr];
+			char ea[64];
+			char *rm_operand, *seg_reg = segment_registers[sr];
 
-			switch (mod) {
-			case 0b11:	// register to register
-				char *rm_name = registers[(w << 3) + rm];
-				char *src = d ? rm_name : reg_name;
-				char *dst = d ? reg_name : rm_name;
-				printf("mov %s, %s\n", dst, src);
-				break;
+			bool is_reg = decode_rm(input, mod, rm, true, ea, &rm_operand);
 
-			case 0b01:	// memory mode, 8 bit displacement
-				get_8bit_displacement(ea, rm, input);
-				printf("mov %s, %s\n", d ? reg_name : ea, d ? ea : reg_name);
-				break;
+			char *src = d ? (is_reg ? rm_operand : ea) : seg_reg;
+			char *dst = d ? seg_reg : (is_reg ? rm_operand : ea);
 
-			case 0b10:	// memory mode, 16 bit displacement
-				get_16bit_displacement(ea, rm, input);
-				printf("mov %s, %s\n", d ? reg_name : ea, d ? ea : reg_name);
-				break;
+			printf("mov %s, %s\n", dst, src);
+			continue;
+		}
+		// ADD register/memory to/from register
+		if ((opcode & 0b11111100) == OP_ADD_RM_TO_RM) {
+			bool d = (opcode >> 1) & 1;
+			bool w = opcode & 1;
 
-			case 0b00:	// memory mode, no displacement
-				if (rm == 0b110) {
-					int lo = fgetc(input);
-					int hi = fgetc(input);
-					if (lo == EOF || hi == EOF) {
-						fprintf(stderr, "Unexpected EOF reading address\n");
-						fclose(input);
-						return -1;
-					}
-					uint16_t addr = lo | (hi << 8);
-					sprintf(ea, "[%d]", addr);
-				} else {
-					sprintf(ea, "[%s]", ea_base[rm]);
-				}
-				printf("mov %s, %s\n", d ? reg_name : ea, d ? ea : reg_name);
-				break;
+			uint8_t modrm = fgetc(input);
+			uint8_t mod = modrm >> 6;
+			uint8_t reg = (modrm >> 3) & 7;
+			uint8_t rm = modrm & 7;
 
-			default:
-				fprintf(stderr, "Unsupported addressing mode: %b\n", mod);
-				return -1;
+			char ea[64];
+			char *rm_operand, *reg_operand = registers[(w << 3) + reg];
+
+			bool is_reg = decode_rm(input, mod, rm, w, ea, &rm_operand);
+
+			char *src = d ? (is_reg ? rm_operand : ea) : reg_operand;
+			char *dst = d ? reg_operand : (is_reg ? rm_operand : ea);
+
+			printf("add %s, %s\n", dst, src);
+			continue;
+		}
+		// ADD immediate to accumulator
+		if ((opcode & 0b11111110) == OP_ADD_IMM_TO_ACC) {
+			bool w = opcode & 1;
+			bool s = false;
+
+			int16_t data = get_immediate(input, w, s);
+
+			printf("add %s %s, %d\n", w ? "word" : "byte", w ? "ax" : "al", data);
+			continue;
+		}
+		// SUB register/memory to/from register
+		if ((opcode & 0b11111100) == OP_SUB_RM_TO_RM) {
+			bool d = (opcode >> 1) & 1;
+			bool w = opcode & 1;
+
+			uint8_t modrm = fgetc(input);
+			uint8_t mod = modrm >> 6;
+			uint8_t reg = (modrm >> 3) & 7;
+			uint8_t rm = modrm & 7;
+
+			char ea[64];
+			char *rm_operand, *reg_operand = registers[(w << 3) + reg];
+
+			bool is_reg = decode_rm(input, mod, rm, w, ea, &rm_operand);
+
+			char *src = d ? (is_reg ? rm_operand : ea) : reg_operand;
+			char *dst = d ? reg_operand : (is_reg ? rm_operand : ea);
+
+			printf("sub %s, %s\n", dst, src);
+			continue;
+		}
+		// SUB immediate to accumulator
+		if ((opcode & 0b11111110) == OP_SUB_IMM_TO_ACC) {
+			bool w = opcode & 1;
+			bool s = false;
+
+			int16_t data = get_immediate(input, w, s);
+
+			printf("sub %s %s, %d\n", w ? "word" : "byte", w ? "ax" : "al", data);
+			continue;
+		}
+		// CMP register/memory to/from register
+		if ((opcode & 0b11111100) == OP_CMP_RM_TO_RM) {
+			bool d = (opcode >> 1) & 1;
+			bool w = opcode & 1;
+
+			uint8_t modrm = fgetc(input);
+			uint8_t mod = modrm >> 6;
+			uint8_t reg = (modrm >> 3) & 7;
+			uint8_t rm = modrm & 7;
+
+			char ea[64];
+			char *rm_operand, *reg_operand = registers[(w << 3) + reg];
+
+			bool is_reg = decode_rm(input, mod, rm, w, ea, &rm_operand);
+
+			char *src = d ? (is_reg ? rm_operand : ea) : reg_operand;
+			char *dst = d ? reg_operand : (is_reg ? rm_operand : ea);
+
+			printf("cmp %s, %s\n", dst, src);
+			continue;
+		}
+		// CMP immediate to accumulator
+		if ((opcode & 0b11111110) == OP_CMP_IMM_TO_ACC) {
+			bool w = opcode & 1;
+			bool s = false;
+
+			int16_t data = get_immediate(input, w, s);
+
+			printf("cmp %s %s, %d\n", w ? "word" : "byte", w ? "ax" : "al", data);
+			continue;
+		}
+		// ARITHMETIC immediate to register/memory
+		if ((opcode & 0b11111100) == OP_ARITH_IMM_TO_RM) {
+			bool w = opcode & 1;
+			bool s = (opcode >> 1) & 1;
+
+			uint8_t modrm = fgetc(input);
+			uint8_t mod = modrm >> 6;
+			uint8_t opext = (modrm >> 3) & 7;
+			uint8_t rm = modrm & 7;
+
+			char *op = imm_op[opext];
+			char ea[64];
+			char *rm_operand;
+			bool is_reg = decode_rm(input, mod, rm, w, ea, &rm_operand);
+
+			int16_t data = get_immediate(input, w, s);
+
+			if (is_reg) {
+				printf("%s %s, %d\n", op, rm_operand, data);
+			} else {
+				printf("%s %s %s, %d\n", op, w ? "word" : "byte", ea, data);
 			}
-
 			continue;
 		}
 
-		fprintf(stderr, "Unsupported instruction %b (%x)\n", c, c);
-		return -1;
+		if ((opcode & 0b11110000) == OP_COND_JUMP) {
+			int8_t offset = get_immediate(input, false, true);
+			printf("%s $%+d\n", jumps[opcode & 0b00001111], offset + 2);
+			continue;
+		}
+
+		if ((opcode & 0b11110000) == OP_COND_LOOP) {
+			int8_t offset = get_immediate(input, false, true);
+			printf("%s $%+d\n", loops[opcode & 0b00000011], offset + 2);
+			continue;
+		}
+
+		fprintf(stderr, "Unsupported instruction:  0x%02x\n", opcode);
+		return 1;
 	}
 
+	fclose(input);
+	return 0;
 }
