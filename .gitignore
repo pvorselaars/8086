@@ -1,3 +1,5 @@
-8086
-*.bin
-*.test*
+.idea
+
+bin
+obj
+*.user
