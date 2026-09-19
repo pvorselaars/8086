@@ -1,26 +1,5 @@
 namespace Sim8086;
 
-enum Register
-{
-    None,
-    a,
-    b,
-    c,
-    d,
-    sp,
-    bp,
-    si,
-    di,
-    es,
-    cs,
-    ss,
-    ds,
-    ip,
-    flags,
-    
-    Count
-}
-
 public class Instruction(Dictionary<Bits, long> bits)
 {
     public string Operation = "None";
