@@ -34,6 +34,6 @@ public class Instruction(Dictionary<Bits, long> bits)
 
         var (dst, src) = d == 0 ? (regOperand, rmOperand) : (rmOperand, regOperand);
 
-        return $"{Operation} {src}, {dst};\n";
+        return $"{Operation} {src}, {dst}\n";
     }
 }

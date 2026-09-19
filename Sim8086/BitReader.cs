@@ -2,6 +2,7 @@ namespace Sim8086;
 
 public class BitReader(byte[] memory, int byteOffset = 0)
 {
+    private readonly int _startBitOffset = byteOffset * 8;
     private int _bitOffset = byteOffset * 8;
 
     public uint Read(int count)
@@ -23,6 +24,6 @@ public class BitReader(byte[] memory, int byteOffset = 0)
         return result;
     }
 
-    public int BitsRead => _bitOffset;
-    public int BytesRead => (_bitOffset + 7) / 8;
+    public int BitsRead => _bitOffset - _startBitOffset;
+    public int BytesRead => (BitsRead + 7) / 8;
 }

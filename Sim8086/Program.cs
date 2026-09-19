@@ -30,7 +30,7 @@ public class Program
         
         var lines = new[]
         {
-            "bits 16;"
+            "bits 16"
         }.Concat(instructions.Select(i => i.Print()));
 
         await File.WriteAllLinesAsync(outputFilename, lines);
