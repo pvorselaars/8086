@@ -17,6 +17,8 @@ public class Program
             Console.WriteLine("Can't read input file");
             return 2;
         }
+        
+        Array.Clear(Memory, 0, Memory.Length);
 
         var readCount = await inputFile.ReadAsync(Memory, 0, Memory.Length);
         inputFile.Close();

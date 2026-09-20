@@ -56,7 +56,6 @@ public class Decoder(ITestOutputHelper output)
         finally
         {
             File.Delete(binaryFile);
-            File.Delete(intermediateFile);
             File.Delete(comparisonFile);
         }
     }
